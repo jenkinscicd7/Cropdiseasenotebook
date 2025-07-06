@@ -10,13 +10,18 @@ import android.graphics.Bitmap
 import android.media.ThumbnailUtils
 import android.os.Bundle
 import android.provider.MediaStore
+import android.view.View
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.annotation.Nullable
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.example.crdisease.adapter.HistoryAdapter
 import com.example.crdisease.data.AppDatabase
 import com.example.crdisease.model.DiseaseRecord
 import com.example.crdisease.utils.UserUtils.getLoggedInUserId
@@ -31,7 +36,6 @@ import java.nio.channels.FileChannel
 import kotlin.properties.Delegates
 
 class  MainActivity : AppCompatActivity() {
-
     private lateinit var camera: Button
     private lateinit var gallery: Button
     private lateinit var imageView: ImageView
@@ -41,14 +45,13 @@ class  MainActivity : AppCompatActivity() {
     private var userId by Delegates.notNull<Long>()
     private lateinit var database: AppDatabase
     private lateinit var tts: TextToSpeech
-
-
+    private lateinit var historyRecyclerView: RecyclerView
+    private lateinit var historyButton: Button
     private val diseaseRecommendations = mapOf(
         "potato_early_blight" to "Remove infected leaves and use fungicides like Mancozeb. Rotate crops regularly.",
         "potato_healthy" to "Your crop is healthy. Continue regular monitoring and best practices.",
         "potato_late_blight" to "Apply copper-based fungicides. Remove infected plants. Improve soil drainage and avoid overhead irrigation."
     )
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,9 +65,48 @@ class  MainActivity : AppCompatActivity() {
         userId = getLoggedInUserId(this)
         database = AppDatabase.getDatabase(this)
 
+        historyRecyclerView = findViewById(R.id.historyRecyclerView)
+        historyButton = findViewById(R.id.history_button)
+        historyRecyclerView.layoutManager = LinearLayoutManager(this)
 
 
-        try {
+        historyButton.setOnClickListener {
+            if (historyRecyclerView.visibility == View.VISIBLE) {
+                historyRecyclerView.visibility = View.GONE
+                historyButton.text = "View History"
+            } else {
+                lifecycleScope.launch {
+                    val history = database.diseaseRecordDao().getRecordsByUserId(userId)
+                    runOnUiThread {
+                        if (history.isNotEmpty()) {
+                            historyRecyclerView.adapter = HistoryAdapter(history)
+                            historyRecyclerView.visibility = View.VISIBLE
+                        } else {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "No history found",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+
+        historyButton.setOnLongClickListener{
+            lifecycleScope.launch{
+                database.diseaseRecordDao().deleteRecordsByUserId(userId)
+                runOnUiThread {
+                    historyRecyclerView.adapter = HistoryAdapter(emptyList())
+                    historyRecyclerView.visibility = View.GONE
+                    historyButton.text = "View History"
+                    Toast.makeText(this@MainActivity, "History cleared", Toast.LENGTH_SHORT).show()
+                }
+            }
+            true
+        }
+
+                    try {
             interpreter = Interpreter(loadModelFile("model.tflite"))
         } catch (e: IOException) {
             e.printStackTrace()
@@ -84,8 +126,7 @@ class  MainActivity : AppCompatActivity() {
             startActivityForResult(intent, 1)
         }
 
-}
-
+    }
 
 
     private fun loadModelFile(filename: String): MappedByteBuffer {
@@ -105,11 +146,12 @@ class  MainActivity : AppCompatActivity() {
         interpreter.run(byteBuffer, output)
 
         val confidences = output[0]
-        val labels = arrayOf("potato_early_blight", "potato_healthy", "potato_late_blight")
+        val labels = arrayOf("potato_early_blight", "potato_late_blight", "potato_healthy")
 
         val maxIndex = confidences.indices.maxByOrNull { confidences[it] } ?: -1
         val predictedLabel = labels[maxIndex]
-        val recommendation = diseaseRecommendations[predictedLabel] ?: "No specific recommendation available."
+        val recommendation =
+            diseaseRecommendations[predictedLabel] ?: "No specific recommendation available."
 
         // Show disease and recommendation in the TextView
         result.text = "Disease: $predictedLabel\n\nRecommendation:\n$recommendation"
@@ -160,6 +202,7 @@ class  MainActivity : AppCompatActivity() {
                     imageView.setImageBitmap(image)
                     classifyImage(image)
                 }
+
                 1 -> {
                     val uri = data?.data
                     var image: Bitmap? = null
@@ -183,8 +226,10 @@ class  MainActivity : AppCompatActivity() {
 
     }
 
+}
 
-    }
+
+
     
 
 

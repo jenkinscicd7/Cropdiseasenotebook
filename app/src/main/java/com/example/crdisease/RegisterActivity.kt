@@ -94,7 +94,7 @@ class RegisterActivity : AppCompatActivity() {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
 
-        sharedPreferences.edit().putInt("user_id", userId.toInt()).apply()
+        sharedPreferences.edit().putLong("user_id", userId).apply()
     }
 }
 
