@@ -10,7 +10,7 @@ import java.util.Date
 import com.example.crdisease.R
 
 
-class HistoryAdapter(private val records: List<DiseaseRecord>) :
+class HistoryAdapter(private val records: MutableList<DiseaseRecord>) :
     RecyclerView.Adapter<HistoryAdapter.ViewHolder>() {
 
     class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -33,4 +33,21 @@ class HistoryAdapter(private val records: List<DiseaseRecord>) :
         holder.recommendationText.text = "Recommendation: ${record.recommendation}"
         holder.timestampText.text = "Time: ${Date(record.timestamp)}"
     }
+    fun getRecordAt(position: Int): DiseaseRecord = records[position]
+
+
+
+    fun removeRecordAt(position: Int) {
+        records.removeAt(position)
+        notifyItemRemoved(position)
+    }
+
+    fun updateRecords(newRecords: List<DiseaseRecord>) {
+        records.clear()
+        records.addAll(newRecords)
+        notifyDataSetChanged()
+    }
+
+
+
 }

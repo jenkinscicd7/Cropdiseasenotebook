@@ -1,9 +1,6 @@
 package com.example.crdisease
 
 import android.Manifest
-import android.app.Activity
-import android.speech.tts.TextToSpeech
-import java.util.*
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -11,14 +8,12 @@ import android.media.ThumbnailUtils
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.View
-import android.widget.Button
-import android.widget.ImageView
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.annotation.Nullable
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.crdisease.adapter.HistoryAdapter
@@ -35,7 +30,7 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import kotlin.properties.Delegates
 
-class  MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity() {
     private lateinit var camera: Button
     private lateinit var gallery: Button
     private lateinit var imageView: ImageView
@@ -44,9 +39,10 @@ class  MainActivity : AppCompatActivity() {
     private lateinit var interpreter: Interpreter
     private var userId by Delegates.notNull<Long>()
     private lateinit var database: AppDatabase
-    private lateinit var tts: TextToSpeech
     private lateinit var historyRecyclerView: RecyclerView
     private lateinit var historyButton: Button
+    private lateinit var adapter: HistoryAdapter
+
     private val diseaseRecommendations = mapOf(
         "potato_early_blight" to "Remove infected leaves and use fungicides like Mancozeb. Rotate crops regularly.",
         "potato_healthy" to "Your crop is healthy. Continue regular monitoring and best practices.",
@@ -61,14 +57,34 @@ class  MainActivity : AppCompatActivity() {
         gallery = findViewById(R.id.button2)
         result = findViewById(R.id.result)
         imageView = findViewById(R.id.imageView)
+        historyRecyclerView = findViewById(R.id.historyRecyclerView)
+        historyButton = findViewById(R.id.history_button)
 
         userId = getLoggedInUserId(this)
         database = AppDatabase.getDatabase(this)
 
-        historyRecyclerView = findViewById(R.id.historyRecyclerView)
-        historyButton = findViewById(R.id.history_button)
+        adapter = HistoryAdapter(mutableListOf())
+        historyRecyclerView.adapter = adapter
         historyRecyclerView.layoutManager = LinearLayoutManager(this)
 
+        // Set up swipe to delete
+        val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
+            override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val position = viewHolder.adapterPosition
+                val record = adapter.getRecordAt(position)
+
+                lifecycleScope.launch {
+                    database.diseaseRecordDao().deleteRecord(record)
+                    runOnUiThread {
+                        adapter.removeRecordAt(position)
+                        Toast.makeText(this@MainActivity, "Deleted", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        })
+        itemTouchHelper.attachToRecyclerView(historyRecyclerView)
 
         historyButton.setOnClickListener {
             if (historyRecyclerView.visibility == View.VISIBLE) {
@@ -79,34 +95,18 @@ class  MainActivity : AppCompatActivity() {
                     val history = database.diseaseRecordDao().getRecordsByUserId(userId)
                     runOnUiThread {
                         if (history.isNotEmpty()) {
-                            historyRecyclerView.adapter = HistoryAdapter(history)
+                            adapter.updateRecords(history)
                             historyRecyclerView.visibility = View.VISIBLE
+                            historyButton.text = "Hide History"
                         } else {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "No history found",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            Toast.makeText(this@MainActivity, "No history found", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
             }
         }
 
-        historyButton.setOnLongClickListener{
-            lifecycleScope.launch{
-                database.diseaseRecordDao().deleteRecordsByUserId(userId)
-                runOnUiThread {
-                    historyRecyclerView.adapter = HistoryAdapter(emptyList())
-                    historyRecyclerView.visibility = View.GONE
-                    historyButton.text = "View History"
-                    Toast.makeText(this@MainActivity, "History cleared", Toast.LENGTH_SHORT).show()
-                }
-            }
-            true
-        }
-
-                    try {
+        try {
             interpreter = Interpreter(loadModelFile("model.tflite"))
         } catch (e: IOException) {
             e.printStackTrace()
@@ -125,9 +125,7 @@ class  MainActivity : AppCompatActivity() {
             val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
             startActivityForResult(intent, 1)
         }
-
     }
-
 
     private fun loadModelFile(filename: String): MappedByteBuffer {
         val fileDescriptor = assets.openFd(filename)
@@ -147,27 +145,22 @@ class  MainActivity : AppCompatActivity() {
 
         val confidences = output[0]
         val labels = arrayOf("potato_early_blight", "potato_late_blight", "potato_healthy")
-
         val maxIndex = confidences.indices.maxByOrNull { confidences[it] } ?: -1
         val predictedLabel = labels[maxIndex]
-        val recommendation =
-            diseaseRecommendations[predictedLabel] ?: "No specific recommendation available."
+        val recommendation = diseaseRecommendations[predictedLabel] ?: "No specific recommendation available."
 
-        // Show disease and recommendation in the TextView
         result.text = "Disease: $predictedLabel\n\nRecommendation:\n$recommendation"
 
         val diseaseRecord = DiseaseRecord(
             userId = userId,
             disease = predictedLabel,
             recommendation = recommendation,
-            timestamp = System.currentTimeMillis(),
+            timestamp = System.currentTimeMillis()
         )
 
-        // Insert into Room DB
         lifecycleScope.launch {
             database.diseaseRecordDao().insertRecord(diseaseRecord)
         }
-
     }
 
     private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
@@ -180,10 +173,10 @@ class  MainActivity : AppCompatActivity() {
         var pixelIndex = 0
         for (i in 0 until imageSize) {
             for (j in 0 until imageSize) {
-                val pixelValue = intValues[pixelIndex++]
-                byteBuffer.putFloat(((pixelValue shr 16) and 0xFF) / 255f)
-                byteBuffer.putFloat(((pixelValue shr 8) and 0xFF) / 255f)
-                byteBuffer.putFloat((pixelValue and 0xFF) / 255f)
+                val pixel = intValues[pixelIndex++]
+                byteBuffer.putFloat(((pixel shr 16) and 0xFF) / 255f)
+                byteBuffer.putFloat(((pixel shr 8) and 0xFF) / 255f)
+                byteBuffer.putFloat((pixel and 0xFF) / 255f)
             }
         }
 
@@ -205,12 +198,13 @@ class  MainActivity : AppCompatActivity() {
 
                 1 -> {
                     val uri = data?.data
-                    var image: Bitmap? = null
-                    try {
-                        image = MediaStore.Images.Media.getBitmap(this.contentResolver, uri!!)
+                    val image: Bitmap? = try {
+                        MediaStore.Images.Media.getBitmap(this.contentResolver, uri!!)
                     } catch (e: IOException) {
                         e.printStackTrace()
+                        null
                     }
+
                     image?.let {
                         imageView.setImageBitmap(it)
                         classifyImage(it)
@@ -223,9 +217,7 @@ class  MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         interpreter.close()
-
     }
-
 }
 
 
